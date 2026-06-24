@@ -37,7 +37,8 @@
     .pin-dot { width:13px;height:13px;border-radius:50%;background:rgba(255,255,255,0.15);border:1.5px solid rgba(255,255,255,0.35);transition:all .15s; }
     .pin-dot.filled { background:#fff;border-color:#fff;transform:scale(1.12);box-shadow:0 0 8px rgba(255,255,255,0.5); }
     .pin-dot.error  { background:#EF4444;border-color:#EF4444; }
-    .pin-key { width:100%;aspect-ratio:1;border-radius:50%;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:22px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .12s;-webkit-tap-highlight-color:transparent; }
+    .pin-key { width:100%;aspect-ratio:1;border-radius:50%;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:22px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .12s;-webkit-tap-highlight-color:transparent;user-select:none;touch-action:manipulation; }
+    .pin-key * { pointer-events:none; }
     .pin-key:active { background:rgba(255,255,255,0.2);transform:scale(0.92); }
     .pin-key-ghost  { background:transparent!important;border:none!important;font-size:12px;font-weight:600;color:rgba(255,255,255,0.4); }
     .pin-shake { animation:pinShake .4s; }
@@ -210,10 +211,6 @@
   </style>
 </head>
 <body>
-  <div class="preload preload-container">
-    <div class="preload-logo"><div class="spinner"></div></div>
-  </div>
-
   <!-- ===== PIN Lock ===== -->
   <div id="pin-lock-screen" style="position:fixed;inset:0;z-index:5000;background:linear-gradient(160deg,#0D1B2A 0%,#152336 50%,#0D1B2A 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;">
     <!-- Glow orb -->
@@ -241,7 +238,7 @@
         <button class="pin-key" data-num="9">9</button>
         <button class="pin-key pin-key-ghost" id="pin-forgot-btn">Weka upya</button>
         <button class="pin-key" data-num="0">0</button>
-        <button class="pin-key pin-key-ghost" id="pin-backspace-btn"><i class="icon-left"></i></button>
+        <button class="pin-key pin-key-ghost" id="pin-backspace-btn" style="font-size:20px;">⌫</button>
       </div>
       <p style="margin-top:24px;"><a href="login.html" style="color:rgba(255,255,255,0.25);font-size:11px;">Rudi kwenye Ingia</a></p>
     </div>
@@ -471,16 +468,29 @@
     }
 
     function setupPinKeypad() {
+      // Use both touchend and click — touchend fires faster on mobile,
+      // click is the fallback. preventDefault on touchend stops the
+      // subsequent click from double-firing.
+      function addTap(el, fn) {
+        el.addEventListener('touchend', function(e) { e.preventDefault(); fn(); }, { passive: false });
+        el.addEventListener('click', fn);
+      }
+
       document.querySelectorAll('.pin-key[data-num]').forEach(btn => {
-        btn.addEventListener('click', () => {
+        addTap(btn, () => {
           if (enteredPin.length >= PIN_LENGTH) return;
           enteredPin += btn.dataset.num;
           renderPinDots();
           if (enteredPin.length === PIN_LENGTH) checkPin();
         });
       });
-      document.getElementById('pin-backspace-btn').addEventListener('click', () => { enteredPin = enteredPin.slice(0,-1); renderPinDots(); });
-      document.getElementById('pin-forgot-btn').addEventListener('click', () => {
+
+      addTap(document.getElementById('pin-backspace-btn'), () => {
+        enteredPin = enteredPin.slice(0, -1);
+        renderPinDots();
+      });
+
+      addTap(document.getElementById('pin-forgot-btn'), () => {
         document.getElementById('pin-lock-screen').style.display = 'none';
         openResetScreen();
       });
@@ -531,18 +541,40 @@
       });
     }
 
-    document.addEventListener('DOMContentLoaded', async function () {
-      if (!(await requireAdmin())) return;
+    // Boot sequence — runs once DOM is ready
+    // 1. Verify Firebase Auth + admin status (server-side)
+    // 2. If ok, show PIN screen (already visible by default)
+    // 3. If session already unlocked, skip PIN and go straight to panel
+    async function boot() {
+      // Show a minimal loading state on the PIN screen while auth resolves
+      const pinErr = document.getElementById('pin-error');
+      pinErr.textContent = 'Inathibitisha...';
+
+      try {
+        const ok = await requireAdmin();
+        if (!ok) return; // requireAdmin redirects on failure
+      } catch(e) {
+        pinErr.textContent = 'Hitilafu ya mtandao. Rejesha ukurasa.';
+        return;
+      }
+
+      pinErr.textContent = '';
       const fb = await wpFirebaseReady();
       adminUid = fb.auth.currentUser.uid;
       await ensurePinInitialized();
       setupPinKeypad();
       setupResetScreen();
       renderPinDots();
+
       if (sessionStorage.getItem('wp_admin_unlocked') === '1') {
         document.getElementById('pin-lock-screen').style.display = 'none';
         await initAdminPanel();
       }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      // Small defer so Firebase modules finish loading
+      setTimeout(boot, 100);
     });
 
     /* ═══════════════════════════════════════
